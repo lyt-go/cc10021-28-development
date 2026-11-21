@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.services.base import BaseModuleService
+from app.services.crawl_integrity import CrawlIntegrityService
 from app.store import store
 
 
@@ -150,6 +151,147 @@ class MetadataCrawlerService(BaseModuleService):
             "校验失败": len(failed),
             "失败明细": failed,
         }
+
+    # ------------------------------------------------------------------
+    # 空采集批次：超时中断 vs 可证明完成的空结果
+    # ------------------------------------------------------------------
+    def simulate_crawl_timeout(
+        self,
+        datasource_type: str,
+        connection_url: str,
+        scope: str,
+        table_name: str,
+        batch_no: str,
+        timeout_seconds: int = 30,
+    ) -> dict[str, Any]:
+        """模拟采集超时：返回空回包但采集未完成，签发「采集中断」凭证。
+
+        中断后的空回包不允许驱动字段删除，表目录保留原字段；
+        凭证进入采集中断处置范围，等待重试拿到完整性证据。
+        """
+        old_columns = self._snapshot_catalog_columns(table_name)
+        attestation = CrawlIntegrityService().issue_interrupted_attestation(
+            datasource_type=datasource_type,
+            connection_url=connection_url,
+            scope=scope,
+            table_name=table_name,
+            batch_no=batch_no,
+            old_columns=old_columns,
+            reason=f"采集超时（{timeout_seconds}s 未返回）",
+        )
+        return {
+            "采集批号": batch_no,
+            "表名称": table_name,
+            "采集结果": "空回包",
+            "完整性状态": "采集中断",
+            "中断原因": attestation["中断原因"],
+            "凭证编号": attestation["凭证编号"],
+            "凭证哈希": attestation["凭证哈希"],
+            "处置范围": attestation["处置范围"],
+            "目录保留字段数": len(old_columns),
+            "说明": "采集中断，目录保留原字段，重试前不得按字段删除处理",
+        }
+
+    def submit_completed_empty_crawl(
+        self,
+        datasource_type: str,
+        connection_url: str,
+        scope: str,
+        table_name: str,
+        batch_no: str,
+        linked_batch: str | None = None,
+    ) -> dict[str, Any]:
+        """提交可证明采集完成的空结果（源侧实际撤表场景）。
+
+        空回包附带完整采集链路证据（开始/结束时间、空响应指纹），
+        签发「已完成」凭证，可作为变更对比确认字段删除的依据；
+        表目录此时仍保留原字段，等待变更复核确认后再处置。
+        """
+        old_columns = self._snapshot_catalog_columns(table_name)
+        attestation = CrawlIntegrityService().issue_completed_attestation(
+            datasource_type=datasource_type,
+            connection_url=connection_url,
+            scope=scope,
+            table_name=table_name,
+            batch_no=batch_no,
+            old_columns=old_columns,
+            linked_batch=linked_batch,
+        )
+        return {
+            "采集批号": batch_no,
+            "关联批号": linked_batch,
+            "表名称": table_name,
+            "采集结果": "空回包",
+            "完整性状态": "已完成",
+            "凭证编号": attestation["凭证编号"],
+            "凭证哈希": attestation["凭证哈希"],
+            "响应指纹": attestation["响应指纹"],
+            "处置范围": attestation["处置范围"],
+            "目录保留字段数": len(old_columns),
+            "说明": "空结构采集完成且可回查，删除差异需经变更对比凭证核对确认",
+        }
+
+    def retry_interrupted_crawl(
+        self,
+        datasource_type: str,
+        connection_url: str,
+        scope: str,
+        table_name: str,
+        interrupted_batch_no: str,
+        retry_batch_no: str,
+        empty: bool = True,
+    ) -> dict[str, Any]:
+        """采集中断后的重试：关联原中断批次，证明空态来自完成的采集而非中断。
+
+        重试不直接把旧字段当删除：只有重试批次拿到「已完成」完整性证据，
+        后续变更对比才允许确认删除；关联批号保留可追溯链路。
+        """
+        integrity = CrawlIntegrityService()
+        interrupted = integrity.find_by_batch(interrupted_batch_no)
+        if interrupted is None:
+            raise ValueError(f"中断批次 {interrupted_batch_no} 无凭证记录，无法关联重试")
+        if interrupted.get("完整性状态") != "采集中断":
+            raise ValueError(
+                f"批次 {interrupted_batch_no} 状态为{interrupted.get('完整性状态')}，不属于采集中断重试范围"
+            )
+        if not empty:
+            raise ValueError("当前重试仅支持空结构采集，非空重试应走正常采集入库链路")
+        result = self.submit_completed_empty_crawl(
+            datasource_type=datasource_type,
+            connection_url=connection_url,
+            scope=scope,
+            table_name=table_name,
+            batch_no=retry_batch_no,
+            linked_batch=interrupted_batch_no,
+        )
+        result["重试说明"] = (
+            f"重试批次 {retry_batch_no} 关联中断批次 {interrupted_batch_no}，"
+            "中断批次保留采集中断处置结论，不参与删除确认"
+        )
+        return result
+
+    def _snapshot_catalog_columns(self, table_name: str) -> list[str]:
+        """采集前快照目录中该表的旧字段，供中断时证明目录保留了原字段。
+
+        优先取字段画像中的真实字段名；表已登记但画像未生成时，
+        退回目录登记的字段数量，用占位名保留字段数证据，避免旧字段静默丢失。
+        """
+        profile_rows = store.rows("column_profile")
+        columns = sorted({
+            row.get("字段名称")
+            for row in profile_rows
+            if row.get("关联表名") == table_name and row.get("字段名称")
+        })
+        if columns:
+            return columns
+        catalog_entry = next(
+            (row for row in store.rows("table_catalog") if row.get("表名称") == table_name),
+            None,
+        )
+        if catalog_entry is None:
+            return []
+        field_count = int(catalog_entry.get("字段数量") or 0)
+        return [f"目录字段#{idx + 1}" for idx in range(field_count)]
 
     def domain_snapshot(self) -> dict[str, Any]:
         snapshot = super().domain_snapshot()

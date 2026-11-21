@@ -16,6 +16,7 @@ from app.services.dq_template import DqTemplateService
 from app.services.anomaly_pattern import AnomalyPatternService
 from app.services.dq_report import DqReportService
 from app.services.metadata_diff import MetadataDiffService
+from app.services.crawl_integrity import CrawlIntegrityService
 from app.services.dq_alert_channel import DqAlertChannelService
 from app.services.dq_baseline import DqBaselineService
 from app.services.mdm_entity import MdmEntityService
@@ -36,6 +37,7 @@ SERVICES: dict[str, BaseModuleService] = {
     "anomaly_pattern": AnomalyPatternService(),
     "dq_report": DqReportService(),
     "metadata_diff": MetadataDiffService(),
+    "crawl_attestation": CrawlIntegrityService(),
     "dq_alert_channel": DqAlertChannelService(),
     "dq_baseline": DqBaselineService(),
     "mdm_entity": MdmEntityService(),

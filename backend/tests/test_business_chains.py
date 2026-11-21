@@ -187,6 +187,8 @@ class TestTrendScorecardPipeline:
 
     def test_analyze_incident_trend(self):
         svc = DqIncidentService()
+        # 自包含前置数据：不依赖其他用例随机产生的质量事件，避免用例间状态耦合
+        svc.write_quality_incident("rule:ods_order_info.amount", "warning", "12%", "ods_order_info")
         trend = svc.analyze_incident_trend("ods_order_info")
         assert "趋势方向" in trend
         assert "修复率" in trend

@@ -29,3 +29,31 @@ class EntryPayload(BaseModel):
 class ActionPayload(BaseModel):
     action: str
     remark: str | None = None
+
+
+class CrawlTimeoutPayload(BaseModel):
+    datasource_type: str
+    connection_url: str
+    scope: str = "*"
+    table_name: str
+    batch_no: str
+    timeout_seconds: int = 30
+
+
+class EmptyCrawlPayload(BaseModel):
+    datasource_type: str
+    connection_url: str
+    scope: str = "*"
+    table_name: str
+    batch_no: str
+    linked_batch: str | None = None
+
+
+class RetryCrawlPayload(BaseModel):
+    datasource_type: str
+    connection_url: str
+    scope: str = "*"
+    table_name: str
+    interrupted_batch_no: str
+    retry_batch_no: str
+    empty: bool = True

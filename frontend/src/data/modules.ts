@@ -157,6 +157,17 @@ export const MODULES: ModuleMeta[] = [
     metrics: ["变更记录总数", "待审核记录", "已确认记录"],
   },
   {
+    key: "crawl_attestation",
+    name: "采集完整性凭证",
+    entity: "采集完整性凭证",
+    desc: "为空采集批次签发可复核的完整性凭证，区分采集中断与已完成空态，为元数据变更对比的字段删除确认提供证据闸门。",
+    fields: ["凭证编号", "数据源类型", "连接地址", "采集范围", "表名称", "采集批号", "关联批号", "采集结果", "完整性状态", "中断原因", "处置范围", "复核结论"],
+    statuses: ["待复核", "可采信"],
+    actions: [],
+    actionTargets: {},
+    metrics: ["空采集凭证总数", "待复核凭证", "可采信凭证"],
+  },
+  {
     key: "dq_alert_channel",
     name: "告警通知通道",
     entity: "告警配置",

@@ -64,6 +64,7 @@ npm run dev
 | 异常模式识别 | `anomaly_pattern` | 异常模式 | 模式编号、模式名称、检测方法 |
 | 质量报告生成 | `dq_report` | 质量报告 | 报告编号、报告周期、覆盖表数 |
 | 元数据变更对比 | `metadata_diff` | 变更记录 | 变更编号、变更对象、变更类型 |
+| 采集完整性凭证 | `crawl_attestation` | 空采集批次凭证 | 凭证编号、采集批号、完整性状态、处置范围 |
 | 告警通知通道 | `dq_alert_channel` | 告警配置 | 配置编号、关联规则集、通知方式 |
 | 质量基线管理 | `dq_baseline` | 基线定义 | 基线编号、目标表名、基线指标 |
 | 主数据实体注册 | `mdm_entity` | 主数据实体 | 实体编号、实体名称、业务域 |
@@ -76,6 +77,27 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 空采集批次校验（采集完整性凭证）
+
+空表清单只返回接入数为零时，无法区分「采集中断（如超时）」与「源侧实际撤表」。
+`crawl_attestation` 模块为每个空采集批次签发可复核的完整性凭证（证据哈希为
+SHA-256，篡改即可检出），变更对比只有凭「已完成」凭证才能确认字段删除：
+
+| 接口 | 作用 |
+| --- | --- |
+| `POST /api/crawl-integrity/simulate-timeout` | 模拟采集超时，签发「采集中断」凭证，目录保留旧字段，删除挂起 |
+| `POST /api/crawl-integrity/submit-empty` | 提交可证明完成的空结果，签发「已完成」凭证 |
+| `POST /api/crawl-integrity/retry` | 中断后重试，关联原中断批次，不直接把旧字段当删除 |
+| `GET /api/crawl-integrity/attestations` | 带凭证的空表清单（两次空回包各自可回查） |
+| `POST /api/crawl-integrity/attestations/{id}/verify` | 复算凭证哈希 |
+| `GET /api/crawl-integrity/pending-scope` | 凭证视角的待核范围 |
+| `POST /api/crawl-integrity/review` | 采集结论回写变更复核清单（中断/删除分流） |
+| `GET /api/crawl-integrity/review-pending` | 变更复核清单待核范围 |
+
+处置范围：`采集中断处置`（等待重试、保留旧字段、无下游影响）、
+`删除差异处置`（凭证可采信、登记字段删除并触发血缘影响校验）、
+`待凭证补录处置`（出现删除差异但无任何凭证）。
 
 领域：数据工程
 子方向：数仓与数据湖
